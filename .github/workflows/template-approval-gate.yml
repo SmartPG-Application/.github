@@ -4,11 +4,11 @@ on:
   workflow_call:
     inputs:
       service_name:
-        description: "Human-readable service name (e.g. smartpg-frontend)"
+        description: "Human-readable service name"
         required: true
         type: string
       image_tag:
-        description: "Docker image tag to deploy (e.g. v1.2.3)"
+        description: "Docker image tag to deploy"
         required: true
         type: string
       values_key:
@@ -27,9 +27,10 @@ jobs:
   approval-gate:
     name: "Approval Gate — ${{ inputs.service_name }}"
     runs-on: ubuntu-latest
-    environment: Prod
+    environment: production
+
     steps:
-      - name: "Send Approval Request Email"
+      - name: Send Approval Request Email
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -44,8 +45,7 @@ jobs:
             SmartPG — DEPLOYMENT APPROVAL REQUIRED
             ════════════════════════════════════════════════════════════
 
-            A new Docker image has been built and pushed.
-            It is NOW WAITING for your approval to deploy.
+            A new Docker image has been built and is waiting for approval.
 
             ────────────────────────────────────────────────────────────
             Details:
@@ -59,20 +59,18 @@ jobs:
             ────────────────────────────────────────────────────────────
             TO APPROVE (deploys to cluster):
             ────────────────────────────────────────────────────────────
-            1. Open this link:
-               ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            1. Open: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             2. Click "Review deployments"
-            3. Select "Prod"
+            3. Select "production"
             4. Click "Approve and deploy"
 
             ────────────────────────────────────────────────────────────
             TO REJECT (stops pipeline, nothing deploys):
             ────────────────────────────────────────────────────────────
             Same link → Click "Reject"
-
             ════════════════════════════════════════════════════════════
 
-      - name: "Log Approval"
+      - name: Log Approval
         run: |
           echo "════════════════════════════════════════"
           echo "  Deployment Approved!"
