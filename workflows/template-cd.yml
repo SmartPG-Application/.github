@@ -1,0 +1,126 @@
+name: "Template — CD ArgoCD Manifest Update"
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: "Human-readable service name"
+        required: true
+        type: string
+      values_key:
+        description: "Folder name under helm/smartpg/ (e.g. frontend, complaint-service)"
+        required: true
+        type: string
+      image_tag:
+        description: "New Docker image tag to deploy"
+        required: true
+        type: string
+    secrets:
+      MANIFEST_REPO_PAT:
+        required: true
+      SMTP_USERNAME:
+        required: true
+      SMTP_PASSWORD:
+        required: true
+      ALERT_EMAIL:
+        required: true
+
+jobs:
+  update-manifest:
+    name: "7. CD — ${{ inputs.service_name }}"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SmartPG-helm repo
+        uses: actions/checkout@v4
+        with:
+          repository: SmartPG-Application/SmartPG-helm
+          token: ${{ secrets.MANIFEST_REPO_PAT }}
+          ref: main
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Show current tag
+        run: |
+          echo "Current tag for ${{ inputs.values_key }}:"
+          yq '.image.tag' helm/smartpg/${{ inputs.values_key }}/values.yaml
+
+      - name: Update image tag
+        run: |
+          yq -i \
+            '.image.tag = "${{ inputs.image_tag }}"' \
+            helm/smartpg/${{ inputs.values_key }}/values.yaml
+
+          echo "New tag for ${{ inputs.values_key }}:"
+          yq '.image.tag' helm/smartpg/${{ inputs.values_key }}/values.yaml
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add helm/smartpg/${{ inputs.values_key }}/values.yaml
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit — tag already up to date"
+            exit 0
+          fi
+
+          git commit -m "cd(${{ inputs.service_name }}): image → ${{ inputs.image_tag }}"
+
+          for i in 1 2 3 4 5; do
+            git push && break
+            echo "Push failed, retry $i/5..."
+            git pull --rebase origin main
+            sleep $((i * 2))
+          done
+
+      - name: Send Success Email
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "SmartPG CD — ${{ inputs.service_name }} deploying ${{ inputs.image_tag }}"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: SmartPG CD Pipeline
+          body: |
+            ════════════════════════════════════════════════════════
+            SmartPG CD — Deployment Triggered Successfully
+            ════════════════════════════════════════════════════════
+
+            Service    : ${{ inputs.service_name }}
+            New Image  : ${{ inputs.image_tag }}
+            Values File: helm/smartpg/${{ inputs.values_key }}/values.yaml
+            Values Key : .image.tag
+
+            ArgoCD will auto-sync to cluster within 3 minutes.
+
+            SmartPG-helm repo: https://github.com/SmartPG-Application/SmartPG-helm
+            ════════════════════════════════════════════════════════
+
+      - name: Send Failure Email
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "SmartPG CD Failed — ${{ inputs.service_name }}"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: SmartPG CD Pipeline
+          body: |
+            CD manifest update FAILED for: ${{ inputs.service_name }}
+
+            Image Tag  : ${{ inputs.image_tag }}
+            Values File: helm/smartpg/${{ inputs.values_key }}/values.yaml
+            Author     : ${{ github.actor }}
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
