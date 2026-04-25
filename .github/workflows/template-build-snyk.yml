@@ -4,12 +4,15 @@ on:
   workflow_call:
     inputs:
       service_name:
+        description: "Human-readable service name"
         required: true
         type: string
       service_path:
+        description: "Path to the service directory"
         required: true
         type: string
       node_version:
+        description: "Node.js version to use"
         required: false
         type: string
         default: "20"
@@ -38,8 +41,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
-          cache: npm
-          cache-dependency-path: "${{ inputs.service_path }}/package.json"
 
       - name: Install Dependencies
         run: npm install --no-audit --no-fund
@@ -83,14 +84,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
-          cache: npm
-          cache-dependency-path: "${{ inputs.service_path }}/package.json"
 
       - name: Install Dependencies
         run: npm install --no-audit --no-fund
 
       - name: Setup Snyk CLI
-        uses: snyk/actions/setup@v1
+        uses: snyk/actions/setup@master
 
       - name: Install snyk-to-html
         run: npm install -g snyk-to-html
