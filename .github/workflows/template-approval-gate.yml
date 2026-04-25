@@ -4,12 +4,11 @@ on:
   workflow_call:
     inputs:
       service_name:
+        description: "Human-readable service name"
         required: true
         type: string
       image_tag:
-        required: true
-        type: string
-      values_key:
+        description: "Docker image tag to deploy"
         required: true
         type: string
     secrets:
@@ -25,6 +24,7 @@ jobs:
     name: "Approval Gate — ${{ inputs.service_name }}"
     runs-on: ubuntu-latest
     environment: production
+
     steps:
       - name: Send Approval Request Email
         uses: dawidd6/action-send-mail@v3
@@ -41,13 +41,16 @@ jobs:
             SmartPG — DEPLOYMENT APPROVAL REQUIRED
             ════════════════════════════════════════════════════════════
 
+            A new Docker image has been built and is waiting for approval.
+
             Service     : ${{ inputs.service_name }}
             Image Tag   : ${{ inputs.image_tag }}
-            Values File : helm/smartpg/${{ inputs.values_key }}/values.yaml
             Triggered By: ${{ github.actor }}
             Branch      : ${{ github.ref_name }}
 
+            ────────────────────────────────────────────────────────────
             TO APPROVE:
+            ────────────────────────────────────────────────────────────
             1. Open: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             2. Click "Review deployments"
             3. Select "production"
@@ -59,8 +62,10 @@ jobs:
 
       - name: Log Approval
         run: |
-          echo "Deployment Approved!"
-          echo "Service  : ${{ inputs.service_name }}"
-          echo "Tag      : ${{ inputs.image_tag }}"
-          echo "Approved : ${{ github.actor }}"
-          echo "Time     : $(date -u)"
+          echo "════════════════════════════════════════"
+          echo "  Deployment Approved!"
+          echo "  Service  : ${{ inputs.service_name }}"
+          echo "  Tag      : ${{ inputs.image_tag }}"
+          echo "  Approved : ${{ github.actor }}"
+          echo "  Time     : $(date -u)"
+          echo "════════════════════════════════════════"
