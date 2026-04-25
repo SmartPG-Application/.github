@@ -1,15 +1,22 @@
-name: "Template — CD ArgoCD Manifest Update"
+name: "Template — CD Manifest Update"
 
 on:
   workflow_call:
     inputs:
       service_name:
+        description: "Human-readable service name"
         required: true
         type: string
       values_key:
+        description: "Key in values file e.g. notification, mess, tenant, payments, complaint, frontend"
         required: true
         type: string
       image_tag:
+        description: "New Docker image tag"
+        required: true
+        type: string
+      environment:
+        description: "dev or prod"
         required: true
         type: string
     secrets:
@@ -24,10 +31,10 @@ on:
 
 jobs:
   update-manifest:
-    name: "7. CD — ${{ inputs.service_name }}"
+    name: "7. CD — ${{ inputs.service_name }} → ${{ inputs.environment }}"
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout SmartPG-helm repo
+      - name: Checkout SmartPG-helm
         uses: actions/checkout@v4
         with:
           repository: SmartPG-Application/SmartPG-helm
@@ -41,29 +48,68 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
-      - name: Show current tag
+      - name: Update values-dev.yaml
+        if: ${{ inputs.environment == 'dev' }}
         run: |
+          echo "=== Updating values-dev.yaml ==="
           echo "Current tag:"
-          yq '.image.tag' helm/smartpg/${{ inputs.values_key }}/values.yaml
+          yq '.${{ inputs.values_key }}.image.tag' \
+            helm/smartpg/values-dev.yaml
 
-      - name: Update image tag
-        run: |
           yq -i \
-            '.image.tag = "${{ inputs.image_tag }}"' \
-            helm/smartpg/${{ inputs.values_key }}/values.yaml
-          echo "New tag:"
-          yq '.image.tag' helm/smartpg/${{ inputs.values_key }}/values.yaml
+            '.${{ inputs.values_key }}.image.tag = "${{ inputs.image_tag }}"' \
+            helm/smartpg/values-dev.yaml
 
-      - name: Commit and push
+          echo "New tag:"
+          yq '.${{ inputs.values_key }}.image.tag' \
+            helm/smartpg/values-dev.yaml
+
+      - name: Update values-prod.yaml and values.yaml
+        if: ${{ inputs.environment == 'prod' }}
+        run: |
+          echo "=== Updating values-prod.yaml ==="
+          echo "Current tag:"
+          yq '.${{ inputs.values_key }}.image.tag' \
+            helm/smartpg/values-prod.yaml
+
+          yq -i \
+            '.${{ inputs.values_key }}.image.tag = "${{ inputs.image_tag }}"' \
+            helm/smartpg/values-prod.yaml
+
+          echo "New tag:"
+          yq '.${{ inputs.values_key }}.image.tag' \
+            helm/smartpg/values-prod.yaml
+
+          echo "=== Updating values.yaml ==="
+          echo "Current tag:"
+          yq '.${{ inputs.values_key }}.image.tag' \
+            helm/smartpg/values.yaml
+
+          yq -i \
+            '.${{ inputs.values_key }}.image.tag = "${{ inputs.image_tag }}"' \
+            helm/smartpg/values.yaml
+
+          echo "New tag:"
+          yq '.${{ inputs.values_key }}.image.tag' \
+            helm/smartpg/values.yaml
+
+      - name: Commit and Push
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add helm/smartpg/${{ inputs.values_key }}/values.yaml
+
+          git add helm/smartpg/values-dev.yaml \
+                  helm/smartpg/values-prod.yaml \
+                  helm/smartpg/values.yaml
+
           if git diff --staged --quiet; then
-            echo "No changes to commit"
+            echo "No changes to commit — tag already up to date"
             exit 0
           fi
-          git commit -m "cd(${{ inputs.service_name }}): image → ${{ inputs.image_tag }}"
+
+          git commit -m \
+            "cd(${{ inputs.service_name }}): [${{ inputs.environment }}] image → ${{ inputs.image_tag }}"
+
           for i in 1 2 3 4 5; do
             git push && break
             echo "Push failed, retry $i/5..."
@@ -79,17 +125,27 @@ jobs:
           server_port: 465
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "SmartPG CD — ${{ inputs.service_name }} deploying ${{ inputs.image_tag }}"
+          subject: "SmartPG CD — ${{ inputs.service_name }} [${{ inputs.environment }}] → ${{ inputs.image_tag }}"
           to: ${{ secrets.ALERT_EMAIL }}
           from: SmartPG CD Pipeline
           body: |
-            SmartPG CD — Deployment Triggered
+            ════════════════════════════════════════════════════
+            SmartPG CD — Manifest Updated Successfully
+            ════════════════════════════════════════════════════
 
-            Service    : ${{ inputs.service_name }}
-            New Image  : ${{ inputs.image_tag }}
-            Values File: helm/smartpg/${{ inputs.values_key }}/values.yaml
+            Service     : ${{ inputs.service_name }}
+            Environment : ${{ inputs.environment }}
+            New Tag     : ${{ inputs.image_tag }}
+            Triggered By: ${{ github.actor }}
 
-            ArgoCD will auto-sync to cluster within 3 minutes.
+            Files Updated:
+            ${{ inputs.environment == 'prod' && '- helm/smartpg/values.yaml' || '' }}
+            ${{ inputs.environment == 'prod' && '- helm/smartpg/values-prod.yaml' || '- helm/smartpg/values-dev.yaml' }}
+
+            ArgoCD will auto-sync within 3 minutes.
+
+            SmartPG-helm: https://github.com/SmartPG-Application/SmartPG-helm
+            ════════════════════════════════════════════════════
 
       - name: Send Failure Email
         if: failure()
@@ -99,14 +155,14 @@ jobs:
           server_port: 465
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "SmartPG CD Failed — ${{ inputs.service_name }}"
+          subject: "SmartPG CD Failed — ${{ inputs.service_name }} [${{ inputs.environment }}]"
           to: ${{ secrets.ALERT_EMAIL }}
           from: SmartPG CD Pipeline
           body: |
             CD manifest update FAILED for: ${{ inputs.service_name }}
 
+            Environment: ${{ inputs.environment }}
             Image Tag  : ${{ inputs.image_tag }}
-            Values File: helm/smartpg/${{ inputs.values_key }}/values.yaml
             Author     : ${{ github.actor }}
 
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
