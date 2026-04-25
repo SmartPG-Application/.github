@@ -12,7 +12,11 @@ on:
         required: true
         type: string
       docker_image_name:
-        description: "Docker Hub image name (without username)"
+        description: "Docker Hub image name"
+        required: true
+        type: string
+      environment:
+        description: "Environment - dev or prod"
         required: true
         type: string
     secrets:
@@ -27,34 +31,23 @@ on:
       ALERT_EMAIL:
         required: true
     outputs:
-      version:
-        description: "Semantic version tag e.g. v1.2.3"
-        value: ${{ jobs.docker.outputs.version }}
+      image_tag:
+        description: "Final image tag pushed to DockerHub"
+        value: ${{ jobs.docker.outputs.image_tag }}
 
 jobs:
   docker:
-    name: "4,5,6 Docker — ${{ inputs.service_name }}"
+    name: "4,5,6. Docker — ${{ inputs.service_name }}"
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
-      version: ${{ steps.meta.outputs.version }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Determine Semantic Version
-        id: version
-        uses: mathieudutour/github-tag-action@v6.2
-        with:
-          github_token: ${{ github.token }}
-          tag_prefix: "${{ inputs.service_name }}/v"
-          default_bump: patch
-          initial_version: "1.0.0"
-          custom_release_rules: "feature:minor:Features,breaking:major:Breaking Changes"
-          dry_run: ${{ github.event_name == 'pull_request' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -65,31 +58,55 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract Image Tags
-        id: meta
+      - name: Set Dev Image Tag
+        if: ${{ inputs.environment == 'dev' }}
+        id: dev_tag
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
-          VERSION="${{ steps.version.outputs.new_version }}"
+          echo "image_tag=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Determine Semantic Version
+        if: ${{ inputs.environment == 'prod' }}
+        id: semver
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ github.token }}
+          tag_prefix: "${{ inputs.service_name }}/v"
+          default_bump: patch
+          initial_version: "1.0.0"
+          custom_release_rules: "feature:minor:Features,breaking:major:Breaking Changes"
+          dry_run: false
+
+      - name: Set Prod Image Tag
+        if: ${{ inputs.environment == 'prod' }}
+        id: prod_tag
+        run: |
+          echo "image_tag=v${{ steps.semver.outputs.new_version }}" >> $GITHUB_OUTPUT
+
+      - name: Set Final Image Tag
+        id: meta
+        run: |
+          if [ "${{ inputs.environment }}" = "dev" ]; then
+            IMAGE_TAG="${{ steps.dev_tag.outputs.image_tag }}"
+          else
+            IMAGE_TAG="${{ steps.prod_tag.outputs.image_tag }}"
+          fi
+
           IMAGE="vignesh8386/${{ inputs.docker_image_name }}"
 
-          echo "image=${IMAGE}"                              >> $GITHUB_OUTPUT
-          echo "tag_version=${IMAGE}:v${VERSION}"           >> $GITHUB_OUTPUT
-          echo "tag_sha=${IMAGE}:v${VERSION}-${SHORT_SHA}"  >> $GITHUB_OUTPUT
-          echo "tag_latest=${IMAGE}:latest"                 >> $GITHUB_OUTPUT
-          echo "version=v${VERSION}"                        >> $GITHUB_OUTPUT
+          echo "image_tag=${IMAGE_TAG}"       >> $GITHUB_OUTPUT
+          echo "full_image=${IMAGE}:${IMAGE_TAG}" >> $GITHUB_OUTPUT
 
           echo "════════════════════════════════════════"
-          echo "  Image  : ${IMAGE}"
-          echo "  Version: v${VERSION}"
-          echo "  SHA    : v${VERSION}-${SHORT_SHA}"
+          echo "  Service    : ${{ inputs.service_name }}"
+          echo "  Environment: ${{ inputs.environment }}"
+          echo "  Image      : ${IMAGE}:${IMAGE_TAG}"
           echo "════════════════════════════════════════"
 
       - name: "4. Build Docker Image"
         run: |
           docker build \
-            -t ${{ steps.meta.outputs.tag_version }} \
-            -t ${{ steps.meta.outputs.tag_sha }} \
-            -t ${{ steps.meta.outputs.tag_latest }} \
+            -t ${{ steps.meta.outputs.full_image }} \
             -f ${{ inputs.service_path }}/Dockerfile \
             ${{ inputs.service_path }}
 
@@ -97,20 +114,16 @@ jobs:
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref: ${{ steps.meta.outputs.tag_version }}
+          image-ref: ${{ steps.meta.outputs.full_image }}
           format: table
           exit-code: "1"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
 
       - name: "6. Push Docker Image to DockerHub"
-        if: github.event_name != 'pull_request'
         run: |
-          echo "Pushing images..."
-          docker push ${{ steps.meta.outputs.tag_version }}
-          docker push ${{ steps.meta.outputs.tag_sha }}
-          docker push ${{ steps.meta.outputs.tag_latest }}
-          echo "All tags pushed successfully"
+          docker push ${{ steps.meta.outputs.full_image }}
+          echo "Pushed: ${{ steps.meta.outputs.full_image }}"
 
       - name: Send Email on Failure
         if: failure()
@@ -126,9 +139,9 @@ jobs:
           body: |
             Docker build/push FAILED for: ${{ inputs.service_name }}
 
-            Image  : vignesh8386/${{ inputs.docker_image_name }}
-            Branch : ${{ github.ref_name }}
-            Commit : ${{ github.sha }}
-            Author : ${{ github.actor }}
+            Environment: ${{ inputs.environment }}
+            Branch     : ${{ github.ref_name }}
+            Commit     : ${{ github.sha }}
+            Author     : ${{ github.actor }}
 
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
