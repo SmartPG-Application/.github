@@ -1,0 +1,134 @@
+name: "Template — Docker Build, Trivy & Push"
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: "Human-readable service name"
+        required: true
+        type: string
+      service_path:
+        description: "Path to the service directory"
+        required: true
+        type: string
+      docker_image_name:
+        description: "Docker Hub image name (without username)"
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+      SMTP_USERNAME:
+        required: true
+      SMTP_PASSWORD:
+        required: true
+      ALERT_EMAIL:
+        required: true
+    outputs:
+      version:
+        description: "Semantic version tag e.g. v1.2.3"
+        value: ${{ jobs.docker.outputs.version }}
+
+jobs:
+  docker:
+    name: "4,5,6 Docker — ${{ inputs.service_name }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Semantic Version
+        id: version
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ github.token }}
+          tag_prefix: "${{ inputs.service_name }}/v"
+          default_bump: patch
+          initial_version: "1.0.0"
+          custom_release_rules: "feature:minor:Features,breaking:major:Breaking Changes"
+          dry_run: ${{ github.event_name == 'pull_request' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Image Tags
+        id: meta
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          VERSION="${{ steps.version.outputs.new_version }}"
+          IMAGE="vignesh8386/${{ inputs.docker_image_name }}"
+
+          echo "image=${IMAGE}"                              >> $GITHUB_OUTPUT
+          echo "tag_version=${IMAGE}:v${VERSION}"           >> $GITHUB_OUTPUT
+          echo "tag_sha=${IMAGE}:v${VERSION}-${SHORT_SHA}"  >> $GITHUB_OUTPUT
+          echo "tag_latest=${IMAGE}:latest"                 >> $GITHUB_OUTPUT
+          echo "version=v${VERSION}"                        >> $GITHUB_OUTPUT
+
+          echo "════════════════════════════════════════"
+          echo "  Image  : ${IMAGE}"
+          echo "  Version: v${VERSION}"
+          echo "  SHA    : v${VERSION}-${SHORT_SHA}"
+          echo "════════════════════════════════════════"
+
+      - name: "4. Build Docker Image"
+        run: |
+          docker build \
+            -t ${{ steps.meta.outputs.tag_version }} \
+            -t ${{ steps.meta.outputs.tag_sha }} \
+            -t ${{ steps.meta.outputs.tag_latest }} \
+            -f ${{ inputs.service_path }}/Dockerfile \
+            ${{ inputs.service_path }}
+
+      - name: "5. Trivy — Container Scan"
+        uses: aquasecurity/trivy-action@master
+        continue-on-error: true
+        with:
+          image-ref: ${{ steps.meta.outputs.tag_version }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: "6. Push Docker Image to DockerHub"
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "Pushing images..."
+          docker push ${{ steps.meta.outputs.tag_version }}
+          docker push ${{ steps.meta.outputs.tag_sha }}
+          docker push ${{ steps.meta.outputs.tag_latest }}
+          echo "All tags pushed successfully"
+
+      - name: Send Email on Failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "SmartPG CI Failed — Docker (${{ inputs.service_name }})"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: SmartPG CI Pipeline
+          body: |
+            Docker build/push FAILED for: ${{ inputs.service_name }}
+
+            Image  : vignesh8386/${{ inputs.docker_image_name }}
+            Branch : ${{ github.ref_name }}
+            Commit : ${{ github.sha }}
+            Author : ${{ github.actor }}
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
