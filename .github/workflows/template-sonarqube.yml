@@ -4,15 +4,12 @@ on:
   workflow_call:
     inputs:
       service_name:
-        description: "Human-readable service name (e.g. smartpg-frontend)"
         required: true
         type: string
       service_path:
-        description: "Path to the service directory relative to repo root"
         required: true
         type: string
       sonar_project_key:
-        description: "SonarQube project key for this service"
         required: true
         type: string
     secrets:
