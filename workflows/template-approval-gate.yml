@@ -1,0 +1,84 @@
+name: "Template — Approval Gate"
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: "Human-readable service name (e.g. smartpg-frontend)"
+        required: true
+        type: string
+      image_tag:
+        description: "Docker image tag to deploy (e.g. v1.2.3)"
+        required: true
+        type: string
+      values_key:
+        description: "Folder name under helm/smartpg/ in SmartPG-helm repo"
+        required: true
+        type: string
+    secrets:
+      SMTP_USERNAME:
+        required: true
+      SMTP_PASSWORD:
+        required: true
+      ALERT_EMAIL:
+        required: true
+
+jobs:
+  approval-gate:
+    name: "Approval Gate — ${{ inputs.service_name }}"
+    runs-on: ubuntu-latest
+    environment: Prod
+    steps:
+      - name: "Send Approval Request Email"
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "Approval Needed — ${{ inputs.service_name }} → ${{ inputs.image_tag }}"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: SmartPG CD Pipeline
+          body: |
+            ════════════════════════════════════════════════════════════
+            SmartPG — DEPLOYMENT APPROVAL REQUIRED
+            ════════════════════════════════════════════════════════════
+
+            A new Docker image has been built and pushed.
+            It is NOW WAITING for your approval to deploy.
+
+            ────────────────────────────────────────────────────────────
+            Details:
+            ────────────────────────────────────────────────────────────
+            Service     : ${{ inputs.service_name }}
+            Image Tag   : ${{ inputs.image_tag }}
+            Values File : helm/smartpg/${{ inputs.values_key }}/values.yaml
+            Triggered By: ${{ github.actor }}
+            Branch      : ${{ github.ref_name }}
+
+            ────────────────────────────────────────────────────────────
+            TO APPROVE (deploys to cluster):
+            ────────────────────────────────────────────────────────────
+            1. Open this link:
+               ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            2. Click "Review deployments"
+            3. Select "Prod"
+            4. Click "Approve and deploy"
+
+            ────────────────────────────────────────────────────────────
+            TO REJECT (stops pipeline, nothing deploys):
+            ────────────────────────────────────────────────────────────
+            Same link → Click "Reject"
+
+            ════════════════════════════════════════════════════════════
+
+      - name: "Log Approval"
+        run: |
+          echo "════════════════════════════════════════"
+          echo "  Deployment Approved!"
+          echo "  Service     : ${{ inputs.service_name }}"
+          echo "  Image Tag   : ${{ inputs.image_tag }}"
+          echo "  Values File : helm/smartpg/${{ inputs.values_key }}/values.yaml"
+          echo "  Approved By : ${{ github.actor }}"
+          echo "  Timestamp   : $(date -u)"
+          echo "════════════════════════════════════════"
